@@ -190,6 +190,70 @@
   /* scrollbar */
   ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  /* ── Mobile Responsiveness ──────────────────────────────────────────────── */
+  @media (max-width: 640px) {
+    :root { --toolbar-h: 54px; }
+
+    /* Landing */
+    .landing-card { padding: 28px 20px; }
+    .logo { margin-bottom: 20px; }
+    .logo h1 { font-size: 20px; }
+
+    /* Toolbar: single scrollable row */
+    #toolbar {
+      height: var(--toolbar-h);
+      padding: 0 8px;
+      gap: 4px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
+      flex-wrap: nowrap;
+    }
+    #toolbar::-webkit-scrollbar { display: none; }
+    .toolbar-group { flex-shrink: 0; }
+    .toolbar-sep { margin: 0 2px; }
+
+    /* Bigger touch targets */
+    .tool-btn { width: 40px; height: 40px; font-size: 16px; flex-shrink: 0; }
+    .color-swatch { width: 28px; height: 28px; flex-shrink: 0; }
+    .stroke-btn { padding: 5px 8px; flex-shrink: 0; }
+
+    /* Room pill: hide label text, keep code */
+    .room-pill { padding: 5px 8px; flex-shrink: 0; }
+    .room-pill > span:first-child { display: none; }
+    .room-id { font-size: 12px; letter-spacing: 0.5px; }
+
+    #usersBar { flex-shrink: 0; }
+
+    /* Tooltips don't work on touch */
+    .tool-tip { display: none; }
+
+    /* Floating panels: fixed at bottom center */
+    .panel {
+      position: fixed !important;
+      left: 12px !important;
+      right: 12px !important;
+      top: auto !important;
+      bottom: 38px !important;
+      width: auto !important;
+      min-width: unset !important;
+    }
+
+    /* Status bar: compact */
+    #elementCount { display: none; }
+    #statusBar { padding: 0 12px; gap: 8px; }
+
+    /* Toast: wrap text */
+    #toast { white-space: normal; text-align: center; max-width: calc(100vw - 48px); }
+  }
+
+  @media (max-width: 380px) {
+    .logo h1 { font-size: 18px; }
+    .landing-card { padding: 22px 16px; }
+    .tool-btn { width: 36px; height: 36px; }
+  }
 </style>
 </head>
 <body>
@@ -594,9 +658,46 @@ mainCanvas.addEventListener('mousemove', onMove);
 mainCanvas.addEventListener('mouseup', onUp);
 mainCanvas.addEventListener('mouseleave', onUp);
 mainCanvas.addEventListener('wheel', onWheel, { passive: false });
-mainCanvas.addEventListener('touchstart', e => { e.preventDefault(); onDown(e); }, { passive: false });
-mainCanvas.addEventListener('touchmove',  e => { e.preventDefault(); onMove(e); }, { passive: false });
-mainCanvas.addEventListener('touchend',   e => { e.preventDefault(); onUp(e);   }, { passive: false });
+let lastPinchDist = null;
+mainCanvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  if (e.touches.length === 2) {
+    lastPinchDist = Math.hypot(
+      e.touches[0].clientX - e.touches[1].clientX,
+      e.touches[0].clientY - e.touches[1].clientY
+    );
+  } else {
+    onDown(e);
+  }
+}, { passive: false });
+mainCanvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  if (e.touches.length === 2) {
+    const dist = Math.hypot(
+      e.touches[0].clientX - e.touches[1].clientX,
+      e.touches[0].clientY - e.touches[1].clientY
+    );
+    if (lastPinchDist) {
+      const rect = mainCanvas.getBoundingClientRect();
+      const mx = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left;
+      const my = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top;
+      const newScale = Math.max(0.1, Math.min(5, viewScale * (dist / lastPinchDist)));
+      viewX = mx - (mx - viewX) * (newScale / viewScale);
+      viewY = my - (my - viewY) * (newScale / viewScale);
+      viewScale = newScale;
+      document.getElementById('zoomDisplay').textContent = Math.round(viewScale * 100) + '%';
+      render();
+    }
+    lastPinchDist = dist;
+  } else {
+    onMove(e);
+  }
+}, { passive: false });
+mainCanvas.addEventListener('touchend', e => {
+  e.preventDefault();
+  if (e.touches.length < 2) lastPinchDist = null;
+  onUp(e);
+}, { passive: false });
 
 function onDown(e) {
   const pos = getPos(e);
