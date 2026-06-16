@@ -1,0 +1,1050 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Syncboard — Real-Time Collaborative Whiteboard</title>
+<script src="/socket.io/socket.io.js"></script>
+<style>
+  /* ── Reset & Base ─────────────────────────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0F1117;
+    --surface: #1A1D27;
+    --surface2: #232636;
+    --border: #2E3147;
+    --accent: #6366F1;
+    --accent2: #818CF8;
+    --text: #E2E4F0;
+    --text2: #9094B0;
+    --danger: #EF4444;
+    --success: #10B981;
+    --toolbar-h: 60px;
+    --radius: 12px;
+    --font: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font-family: var(--font); }
+
+  /* ── Landing Screen ───────────────────────────────────────────────────── */
+  #landing {
+    position: fixed; inset: 0; z-index: 1000;
+    display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(ellipse at 30% 20%, #1e1b4b 0%, #0F1117 60%);
+  }
+  .landing-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 20px; padding: 48px; width: 440px; max-width: 95vw;
+    box-shadow: 0 32px 80px rgba(0,0,0,0.6);
+  }
+  .logo { display: flex; align-items: center; gap: 12px; margin-bottom: 32px; }
+  .logo-icon {
+    width: 44px; height: 44px; border-radius: 12px;
+    background: linear-gradient(135deg, var(--accent), #EC4899);
+    display: flex; align-items: center; justify-content: center; font-size: 22px;
+  }
+  .logo h1 { font-size: 24px; font-weight: 700; letter-spacing: -0.5px; }
+  .logo span { font-size: 12px; color: var(--text2); display: block; font-weight: 400; }
+  .landing-tabs { display: flex; gap: 4px; background: var(--bg); border-radius: 10px; padding: 4px; margin-bottom: 28px; }
+  .tab-btn {
+    flex: 1; padding: 8px; border: none; background: transparent; color: var(--text2);
+    border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 500; transition: all .2s;
+  }
+  .tab-btn.active { background: var(--surface2); color: var(--text); }
+  .field { margin-bottom: 16px; }
+  .field label { display: block; font-size: 13px; color: var(--text2); margin-bottom: 6px; font-weight: 500; }
+  .field input {
+    width: 100%; padding: 12px 14px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 10px; color: var(--text); font-size: 14px; outline: none; transition: border .2s;
+  }
+  .field input:focus { border-color: var(--accent); }
+  .field input::placeholder { color: var(--text2); }
+  .btn-primary {
+    width: 100%; padding: 13px; background: linear-gradient(135deg, var(--accent), #8B5CF6);
+    border: none; border-radius: 10px; color: #fff; font-size: 15px; font-weight: 600;
+    cursor: pointer; transition: opacity .2s; margin-top: 4px;
+  }
+  .btn-primary:hover { opacity: .9; }
+  .divider { text-align: center; color: var(--text2); font-size: 12px; margin: 16px 0; position: relative; }
+  .divider::before, .divider::after { content:''; position:absolute; top:50%; width:42%; height:1px; background:var(--border); }
+  .divider::before { left:0; } .divider::after { right:0; }
+
+  /* ── App Shell ────────────────────────────────────────────────────────── */
+  #app { display: none; flex-direction: column; width: 100%; height: 100%; }
+  #app.visible { display: flex; }
+
+  /* ── Toolbar ──────────────────────────────────────────────────────────── */
+  #toolbar {
+    height: var(--toolbar-h); background: var(--surface); border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; padding: 0 16px; gap: 8px; z-index: 100; flex-shrink: 0;
+    user-select: none;
+  }
+  .toolbar-group { display: flex; align-items: center; gap: 4px; }
+  .toolbar-sep { width: 1px; height: 28px; background: var(--border); margin: 0 6px; }
+  .tool-btn {
+    width: 36px; height: 36px; border: none; background: transparent; color: var(--text2);
+    border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+    font-size: 17px; transition: all .15s; position: relative;
+  }
+  .tool-btn:hover { background: var(--surface2); color: var(--text); }
+  .tool-btn.active { background: var(--accent); color: #fff; }
+  .tool-btn[disabled] { opacity: .35; cursor: not-allowed; }
+  .tool-tip {
+    position: absolute; top: calc(100% + 8px); left: 50%; transform: translateX(-50%);
+    background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+    font-size: 11px; white-space: nowrap; padding: 4px 8px; border-radius: 6px;
+    pointer-events: none; opacity: 0; transition: opacity .15s; z-index: 999;
+  }
+  .tool-btn:hover .tool-tip { opacity: 1; }
+
+  /* Color + stroke pickers */
+  .color-swatch {
+    width: 26px; height: 26px; border-radius: 6px; border: 2px solid var(--border);
+    cursor: pointer; transition: transform .15s; flex-shrink: 0;
+  }
+  .color-swatch:hover { transform: scale(1.1); border-color: var(--accent); }
+  .color-swatch.active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+  #colorPicker { width: 0; height: 0; opacity: 0; position: absolute; }
+  .stroke-btn {
+    padding: 4px 10px; border: 1px solid var(--border); border-radius: 6px;
+    background: transparent; color: var(--text2); font-size: 12px; cursor: pointer;
+    transition: all .15s;
+  }
+  .stroke-btn.active { border-color: var(--accent); color: var(--accent); background: rgba(99,102,241,0.1); }
+
+  /* Room info */
+  .room-pill {
+    display: flex; align-items: center; gap: 8px; background: var(--surface2);
+    border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px;
+    font-size: 13px; color: var(--text2); cursor: pointer; transition: border .2s;
+    margin-left: auto;
+  }
+  .room-pill:hover { border-color: var(--accent); }
+  .room-id { font-weight: 700; color: var(--text); font-size: 14px; letter-spacing: 1px; }
+  .copy-icon { font-size: 13px; }
+
+  /* Users avatars */
+  #usersBar { display: flex; align-items: center; gap: -6px; margin-left: 8px; }
+  .avatar {
+    width: 30px; height: 30px; border-radius: 50%; border: 2px solid var(--surface);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700; color: #fff; margin-left: -6px;
+    text-transform: uppercase; flex-shrink: 0;
+  }
+
+  /* ── Canvas Area ──────────────────────────────────────────────────────── */
+  #canvasWrap {
+    flex: 1; position: relative; overflow: hidden;
+    background-color: #0F1117;
+    background-image: radial-gradient(circle, #2E3147 1px, transparent 1px);
+    background-size: 28px 28px;
+  }
+  #mainCanvas { position: absolute; inset: 0; touch-action: none; }
+  #cursorCanvas { position: absolute; inset: 0; pointer-events: none; touch-action: none; }
+
+  /* ── Floating Panels ──────────────────────────────────────────────────── */
+  .panel {
+    position: absolute; background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 16px; box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+    z-index: 200; min-width: 200px;
+  }
+  #textInputPanel { display: none; }
+  #textInputPanel textarea {
+    width: 100%; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 8px; color: var(--text); font-size: 15px; padding: 10px;
+    resize: none; outline: none; font-family: var(--font); min-height: 80px;
+  }
+  #textInputPanel textarea:focus { border-color: var(--accent); }
+  .panel-actions { display: flex; gap: 8px; margin-top: 10px; }
+  .btn-sm {
+    flex: 1; padding: 8px; border: none; border-radius: 8px; font-size: 13px;
+    font-weight: 600; cursor: pointer; transition: opacity .15s;
+  }
+  .btn-confirm { background: var(--accent); color: #fff; }
+  .btn-cancel { background: var(--surface2); color: var(--text2); }
+  .btn-sm:hover { opacity: .85; }
+
+  /* ── Toast ────────────────────────────────────────────────────────────── */
+  #toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(20px);
+    background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+    padding: 10px 20px; border-radius: 10px; font-size: 14px; font-weight: 500;
+    opacity: 0; transition: all .3s; pointer-events: none; z-index: 9999; white-space: nowrap;
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  /* ── Status bar ───────────────────────────────────────────────────────── */
+  #statusBar {
+    height: 28px; background: var(--surface); border-top: 1px solid var(--border);
+    display: flex; align-items: center; padding: 0 16px; gap: 16px;
+    font-size: 11px; color: var(--text2); flex-shrink: 0;
+  }
+  .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
+  .status-dot.offline { background: var(--danger); }
+  #zoomDisplay { margin-left: auto; }
+
+  /* ── Sticky Note ──────────────────────────────────────────────────────── */
+  .sticky-colors { display: flex; gap: 6px; margin-bottom: 10px; }
+  .sticky-color { width: 22px; height: 22px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; }
+  .sticky-color.active { border-color: white; }
+
+  /* scrollbar */
+  ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<!-- ── LANDING ──────────────────────────────────────────────────────────────── -->
+<div id="landing">
+  <div class="landing-card">
+    <div class="logo">
+      <div class="logo-icon">✦</div>
+      <div>
+        <h1>Syncboard</h1>
+        <span>Real-time collaborative whiteboard</span>
+      </div>
+    </div>
+    <div class="landing-tabs">
+      <button class="tab-btn active" id="tabCreate" onclick="switchTab('create')">Create Board</button>
+      <button class="tab-btn" id="tabJoin" onclick="switchTab('join')">Join Board</button>
+    </div>
+
+    <!-- Create -->
+    <div id="panelCreate">
+      <div class="field">
+        <label>Your Name</label>
+        <input id="createName" type="text" placeholder="e.g. Lakshya" maxlength="20"/>
+      </div>
+      <div class="field">
+        <label>Board Name</label>
+        <input id="boardName" type="text" placeholder="e.g. Project Brainstorm" maxlength="40"/>
+      </div>
+      <button class="btn-primary" onclick="createRoom()">✦ Create Board</button>
+    </div>
+
+    <!-- Join -->
+    <div id="panelJoin" style="display:none">
+      <div class="field">
+        <label>Your Name</label>
+        <input id="joinName" type="text" placeholder="e.g. Lakshya" maxlength="20"/>
+      </div>
+      <div class="field">
+        <label>Room Code</label>
+        <input id="joinCode" type="text" placeholder="e.g. A3F9C2B1" maxlength="8" style="text-transform:uppercase;letter-spacing:2px"/>
+      </div>
+      <button class="btn-primary" onclick="joinRoom()">→ Join Board</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── APP ─────────────────────────────────────────────────────────────────── -->
+<div id="app">
+  <!-- TOOLBAR -->
+  <div id="toolbar">
+    <!-- Tools -->
+    <div class="toolbar-group">
+      <button class="tool-btn active" id="tool-select" onclick="setTool('select')" title="">
+        ↖<span class="tool-tip">Select (V)</span>
+      </button>
+      <button class="tool-btn" id="tool-pen" onclick="setTool('pen')">
+        ✏️<span class="tool-tip">Pen (P)</span>
+      </button>
+      <button class="tool-btn" id="tool-line" onclick="setTool('line')">
+        ╱<span class="tool-tip">Line (L)</span>
+      </button>
+      <button class="tool-btn" id="tool-rect" onclick="setTool('rect')">
+        ▭<span class="tool-tip">Rectangle (R)</span>
+      </button>
+      <button class="tool-btn" id="tool-circle" onclick="setTool('circle')">
+        ◯<span class="tool-tip">Circle (C)</span>
+      </button>
+      <button class="tool-btn" id="tool-arrow" onclick="setTool('arrow')">
+        →<span class="tool-tip">Arrow (A)</span>
+      </button>
+      <button class="tool-btn" id="tool-text" onclick="setTool('text')">
+        T<span class="tool-tip">Text (T)</span>
+      </button>
+      <button class="tool-btn" id="tool-sticky" onclick="setTool('sticky')">
+        📝<span class="tool-tip">Sticky Note (S)</span>
+      </button>
+      <button class="tool-btn" id="tool-eraser" onclick="setTool('eraser')">
+        ⌫<span class="tool-tip">Eraser (E)</span>
+      </button>
+      <button class="tool-btn" id="tool-pan" onclick="setTool('pan')">
+        ✋<span class="tool-tip">Pan (Space)</span>
+      </button>
+    </div>
+
+    <div class="toolbar-sep"></div>
+
+    <!-- Colors -->
+    <div class="toolbar-group" id="colorSwatches">
+      <div class="color-swatch active" style="background:#E2E4F0" onclick="setColor('#E2E4F0')" data-color="#E2E4F0"></div>
+      <div class="color-swatch" style="background:#6366F1" onclick="setColor('#6366F1')" data-color="#6366F1"></div>
+      <div class="color-swatch" style="background:#EC4899" onclick="setColor('#EC4899')" data-color="#EC4899"></div>
+      <div class="color-swatch" style="background:#10B981" onclick="setColor('#10B981')" data-color="#10B981"></div>
+      <div class="color-swatch" style="background:#F59E0B" onclick="setColor('#F59E0B')" data-color="#F59E0B"></div>
+      <div class="color-swatch" style="background:#EF4444" onclick="setColor('#EF4444')" data-color="#EF4444"></div>
+      <div class="color-swatch" style="background:#38BDF8" onclick="setColor('#38BDF8')" data-color="#38BDF8"></div>
+      <input type="color" id="colorPicker" onchange="setColor(this.value)"/>
+      <div class="color-swatch" style="background: conic-gradient(red,yellow,lime,cyan,blue,magenta,red); border:none" onclick="document.getElementById('colorPicker').click()" title="Custom color"></div>
+    </div>
+
+    <div class="toolbar-sep"></div>
+
+    <!-- Stroke -->
+    <div class="toolbar-group">
+      <button class="stroke-btn active" onclick="setStroke(2)" id="stroke-2">S</button>
+      <button class="stroke-btn" onclick="setStroke(4)" id="stroke-4">M</button>
+      <button class="stroke-btn" onclick="setStroke(8)" id="stroke-8">L</button>
+      <button class="stroke-btn" onclick="setStroke(16)" id="stroke-16">XL</button>
+    </div>
+
+    <div class="toolbar-sep"></div>
+
+    <!-- Fill toggle -->
+    <div class="toolbar-group">
+      <button class="tool-btn" id="fillBtn" onclick="toggleFill()" title="">
+        ◈<span class="tool-tip">Toggle Fill</span>
+      </button>
+    </div>
+
+    <div class="toolbar-sep"></div>
+
+    <!-- Actions -->
+    <div class="toolbar-group">
+      <button class="tool-btn" id="undoBtn" onclick="doUndo()" disabled>
+        ↩<span class="tool-tip">Undo (Ctrl+Z)</span>
+      </button>
+      <button class="tool-btn" id="redoBtn" onclick="doRedo()" disabled>
+        ↪<span class="tool-tip">Redo (Ctrl+Y)</span>
+      </button>
+      <button class="tool-btn" onclick="confirmClear()" style="color:var(--danger)">
+        🗑<span class="tool-tip">Clear Board</span>
+      </button>
+      <button class="tool-btn" onclick="exportCanvas()">
+        ⬇<span class="tool-tip">Export PNG</span>
+      </button>
+    </div>
+
+    <!-- Room info + users -->
+    <div id="usersBar"></div>
+    <div class="room-pill" onclick="copyRoomCode()" id="roomPill">
+      <span>Room:</span>
+      <span class="room-id" id="roomDisplay">------</span>
+      <span class="copy-icon">⎘</span>
+    </div>
+  </div>
+
+  <!-- CANVAS -->
+  <div id="canvasWrap">
+    <canvas id="mainCanvas"></canvas>
+    <canvas id="cursorCanvas"></canvas>
+
+    <!-- Text input panel -->
+    <div class="panel" id="textInputPanel">
+      <textarea id="textArea" placeholder="Type something..." rows="3"></textarea>
+      <div class="panel-actions">
+        <button class="btn-sm btn-confirm" onclick="confirmText()">Add</button>
+        <button class="btn-sm btn-cancel" onclick="cancelText()">Cancel</button>
+      </div>
+    </div>
+
+    <!-- Sticky input panel -->
+    <div class="panel" id="stickyPanel" style="display:none">
+      <div class="sticky-colors">
+        <div class="sticky-color active" style="background:#FDE68A" onclick="setStickyColor('#FDE68A','#92400E')" data-bg="#FDE68A"></div>
+        <div class="sticky-color" style="background:#A7F3D0" onclick="setStickyColor('#A7F3D0','#065F46')" data-bg="#A7F3D0"></div>
+        <div class="sticky-color" style="background:#BFDBFE" onclick="setStickyColor('#BFDBFE','#1E40AF')" data-bg="#BFDBFE"></div>
+        <div class="sticky-color" style="background:#FCA5A5" onclick="setStickyColor('#FCA5A5','#7F1D1D')" data-bg="#FCA5A5"></div>
+        <div class="sticky-color" style="background:#DDD6FE" onclick="setStickyColor('#DDD6FE','#4C1D95')" data-bg="#DDD6FE"></div>
+      </div>
+      <textarea id="stickyText" placeholder="Note..." rows="4" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:14px;padding:8px;resize:none;outline:none;font-family:var(--font)"></textarea>
+      <div class="panel-actions">
+        <button class="btn-sm btn-confirm" onclick="confirmSticky()">Add Note</button>
+        <button class="btn-sm btn-cancel" onclick="cancelSticky()">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- STATUS BAR -->
+  <div id="statusBar">
+    <div class="status-dot" id="statusDot"></div>
+    <span id="statusText">Connecting...</span>
+    <span id="elementCount">0 elements</span>
+    <span id="zoomDisplay">100%</span>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div id="toast"></div>
+
+<script>
+// ════════════════════════════════════════════════════════════════════════════
+//  STATE
+// ════════════════════════════════════════════════════════════════════════════
+let socket = null;
+let roomId = '';
+let userName = '';
+let currentTool = 'select';
+let currentColor = '#E2E4F0';
+let currentStroke = 2;
+let fillEnabled = false;
+let stickyBg = '#FDE68A';
+let stickyFg = '#92400E';
+
+// Canvas / viewport
+let elements = [];           // all committed elements
+let liveElement = null;      // element being drawn
+let selectedId = null;       // selected element id
+let remoteCursors = {};      // socketId -> {x,y,color,name}
+
+// Pan & zoom
+let viewX = 0, viewY = 0, viewScale = 1;
+let isPanning = false;
+let panStart = { x: 0, y: 0, vx: 0, vy: 0 };
+let spaceDown = false;
+
+// Drawing
+let isDrawing = false;
+let drawStart = { x: 0, y: 0 };
+let penPoints = [];
+
+// Text / sticky pending
+let pendingTextPos = null;
+let pendingStickyPos = null;
+
+// Undo/redo mirror
+let historyIndex = 0, historyLength = 1;
+
+// ════════════════════════════════════════════════════════════════════════════
+//  CANVAS SETUP
+// ════════════════════════════════════════════════════════════════════════════
+const mainCanvas = document.getElementById('mainCanvas');
+const cursorCanvas = document.getElementById('cursorCanvas');
+const ctx = mainCanvas.getContext('2d');
+const curCtx = cursorCanvas.getContext('2d');
+
+function resizeCanvases() {
+  const wrap = document.getElementById('canvasWrap');
+  const w = wrap.clientWidth, h = wrap.clientHeight;
+  mainCanvas.width = w; mainCanvas.height = h;
+  cursorCanvas.width = w; cursorCanvas.height = h;
+  render();
+}
+window.addEventListener('resize', resizeCanvases);
+
+// ════════════════════════════════════════════════════════════════════════════
+//  LANDING
+// ════════════════════════════════════════════════════════════════════════════
+function switchTab(tab) {
+  document.getElementById('panelCreate').style.display = tab === 'create' ? '' : 'none';
+  document.getElementById('panelJoin').style.display   = tab === 'join'   ? '' : 'none';
+  document.getElementById('tabCreate').classList.toggle('active', tab === 'create');
+  document.getElementById('tabJoin').classList.toggle('active', tab === 'join');
+}
+
+async function createRoom() {
+  const name = document.getElementById('createName').value.trim() || 'Guest';
+  const bname = document.getElementById('boardName').value.trim() || 'Untitled Board';
+  userName = name;
+  const res = await fetch('/api/room', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name: bname }) });
+  const data = await res.json();
+  roomId = data.id;
+  launchApp();
+}
+
+function joinRoom() {
+  const name = document.getElementById('joinName').value.trim() || 'Guest';
+  const code = document.getElementById('joinCode').value.trim().toUpperCase();
+  if (!code || code.length < 6) { toast('Enter a valid room code'); return; }
+  userName = name;
+  roomId = code;
+  launchApp();
+}
+
+function launchApp() {
+  document.getElementById('landing').style.display = 'none';
+  document.getElementById('app').classList.add('visible');
+  document.getElementById('roomDisplay').textContent = roomId;
+  resizeCanvases();
+  connectSocket();
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  SOCKET
+// ════════════════════════════════════════════════════════════════════════════
+function connectSocket() {
+  socket = io();
+  socket.emit('join-room', { roomId, userName });
+
+  socket.on('connect', () => {
+    document.getElementById('statusDot').classList.remove('offline');
+    document.getElementById('statusText').textContent = `Connected as ${userName}`;
+  });
+  socket.on('disconnect', () => {
+    document.getElementById('statusDot').classList.add('offline');
+    document.getElementById('statusText').textContent = 'Disconnected';
+  });
+
+  socket.on('room-state', ({ elements: els, users, historyIndex: hi, historyLength: hl }) => {
+    elements = els;
+    historyIndex = hi; historyLength = hl;
+    updateHistoryBtns();
+    renderUsers(users);
+    render();
+  });
+
+  socket.on('element-update', (el) => {
+    const idx = elements.findIndex(e => e.id === el.id);
+    if (idx !== -1) elements[idx] = el; else elements.push(el);
+    render();
+  });
+  socket.on('element-commit', (el) => {
+    const idx = elements.findIndex(e => e.id === el.id);
+    if (idx !== -1) elements[idx] = el; else elements.push(el);
+    updateStatus();
+    render();
+  });
+  socket.on('element-delete', (id) => {
+    elements = elements.filter(e => e.id !== id);
+    if (selectedId === id) selectedId = null;
+    updateStatus();
+    render();
+  });
+  socket.on('elements-replace', (els) => {
+    elements = els;
+    selectedId = null;
+    updateStatus();
+    render();
+  });
+
+  socket.on('cursor-update', ({ userId, x, y, color, name }) => {
+    remoteCursors[userId] = { x, y, color, name };
+    renderCursors();
+  });
+  socket.on('user-left', (uid) => { delete remoteCursors[uid]; renderCursors(); });
+  socket.on('users-update', renderUsers);
+  socket.on('history-state', ({ historyIndex: hi, historyLength: hl }) => {
+    historyIndex = hi; historyLength = hl;
+    updateHistoryBtns();
+  });
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  TOOLS
+// ════════════════════════════════════════════════════════════════════════════
+function setTool(t) {
+  currentTool = t;
+  document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
+  const el = document.getElementById('tool-' + t);
+  if (el) el.classList.add('active');
+  mainCanvas.style.cursor = t === 'pan' ? 'grab' : t === 'eraser' ? 'crosshair' : t === 'select' ? 'default' : 'crosshair';
+  cancelText(); cancelSticky();
+}
+
+function setColor(c) {
+  currentColor = c;
+  document.querySelectorAll('.color-swatch').forEach(s => {
+    s.classList.toggle('active', s.dataset.color === c);
+  });
+}
+
+let currentStrokeKey = 2;
+function setStroke(s) {
+  currentStroke = s; currentStrokeKey = s;
+  document.querySelectorAll('.stroke-btn').forEach(b => b.classList.remove('active'));
+  const el = document.getElementById('stroke-' + s);
+  if (el) el.classList.add('active');
+}
+
+function toggleFill() {
+  fillEnabled = !fillEnabled;
+  document.getElementById('fillBtn').classList.toggle('active', fillEnabled);
+}
+
+function setStickyColor(bg, fg) {
+  stickyBg = bg; stickyFg = fg;
+  document.querySelectorAll('.sticky-color').forEach(s => {
+    s.classList.toggle('active', s.dataset.bg === bg);
+  });
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  COORDINATE HELPERS
+// ════════════════════════════════════════════════════════════════════════════
+function screenToWorld(sx, sy) {
+  return { x: (sx - viewX) / viewScale, y: (sy - viewY) / viewScale };
+}
+function worldToScreen(wx, wy) {
+  return { x: wx * viewScale + viewX, y: wy * viewScale + viewY };
+}
+function getPos(e) {
+  const rect = mainCanvas.getBoundingClientRect();
+  const cx = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+  const cy = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top;
+  return { sx: cx, sy: cy, ...screenToWorld(cx, cy) };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  MOUSE EVENTS
+// ════════════════════════════════════════════════════════════════════════════
+mainCanvas.addEventListener('mousedown', onDown);
+mainCanvas.addEventListener('mousemove', onMove);
+mainCanvas.addEventListener('mouseup', onUp);
+mainCanvas.addEventListener('mouseleave', onUp);
+mainCanvas.addEventListener('wheel', onWheel, { passive: false });
+mainCanvas.addEventListener('touchstart', e => { e.preventDefault(); onDown(e); }, { passive: false });
+mainCanvas.addEventListener('touchmove',  e => { e.preventDefault(); onMove(e); }, { passive: false });
+mainCanvas.addEventListener('touchend',   e => { e.preventDefault(); onUp(e);   }, { passive: false });
+
+function onDown(e) {
+  const pos = getPos(e);
+
+  // Pan tool or space held
+  if (currentTool === 'pan' || spaceDown) {
+    isPanning = true;
+    panStart = { x: pos.sx, y: pos.sy, vx: viewX, vy: viewY };
+    mainCanvas.style.cursor = 'grabbing';
+    return;
+  }
+
+  // Eraser
+  if (currentTool === 'eraser') {
+    const hit = hitTest(pos.x, pos.y);
+    if (hit) { socket.emit('element-delete', hit.id); }
+    return;
+  }
+
+  // Select
+  if (currentTool === 'select') {
+    const hit = hitTest(pos.x, pos.y);
+    selectedId = hit ? hit.id : null;
+    render();
+    return;
+  }
+
+  // Text
+  if (currentTool === 'text') {
+    pendingTextPos = { x: pos.x, y: pos.y };
+    const panel = document.getElementById('textInputPanel');
+    panel.style.display = 'block';
+    panel.style.left = Math.min(pos.sx + 8, mainCanvas.width - 280) + 'px';
+    panel.style.top = Math.min(pos.sy + 8, mainCanvas.height - 160) + 'px';
+    setTimeout(() => document.getElementById('textArea').focus(), 50);
+    return;
+  }
+
+  // Sticky
+  if (currentTool === 'sticky') {
+    pendingStickyPos = { x: pos.x, y: pos.y };
+    const panel = document.getElementById('stickyPanel');
+    panel.style.display = 'block';
+    panel.style.left = Math.min(pos.sx + 8, mainCanvas.width - 240) + 'px';
+    panel.style.top = Math.min(pos.sy + 8, mainCanvas.height - 200) + 'px';
+    setTimeout(() => document.getElementById('stickyText').focus(), 50);
+    return;
+  }
+
+  // Drawing tools
+  isDrawing = true;
+  drawStart = { x: pos.x, y: pos.y };
+
+  if (currentTool === 'pen') {
+    penPoints = [{ x: pos.x, y: pos.y }];
+    liveElement = {
+      id: genId(), type: 'pen', points: penPoints,
+      color: currentColor, stroke: currentStroke
+    };
+  } else {
+    liveElement = {
+      id: genId(), type: currentTool,
+      x: pos.x, y: pos.y, w: 0, h: 0,
+      color: currentColor, stroke: currentStroke, fill: fillEnabled,
+      x2: pos.x, y2: pos.y
+    };
+  }
+}
+
+function onMove(e) {
+  const pos = getPos(e);
+
+  // Emit cursor
+  if (socket) socket.emit('cursor-move', screenToWorld(pos.sx, pos.sy));
+
+  if (isPanning) {
+    viewX = panStart.vx + (pos.sx - panStart.x);
+    viewY = panStart.vy + (pos.sy - panStart.y);
+    render();
+    return;
+  }
+
+  if (!isDrawing || !liveElement) return;
+
+  if (currentTool === 'pen') {
+    penPoints.push({ x: pos.x, y: pos.y });
+    liveElement.points = [...penPoints];
+  } else {
+    const dx = pos.x - drawStart.x, dy = pos.y - drawStart.y;
+    liveElement.w = dx; liveElement.h = dy;
+    liveElement.x2 = pos.x; liveElement.y2 = pos.y;
+  }
+
+  socket.emit('element-update', liveElement);
+  render();
+}
+
+function onUp(e) {
+  if (isPanning) {
+    isPanning = false;
+    mainCanvas.style.cursor = currentTool === 'pan' ? 'grab' : 'crosshair';
+    return;
+  }
+
+  if (!isDrawing || !liveElement) return;
+  isDrawing = false;
+
+  // Don't commit tiny accidental marks
+  if (currentTool === 'pen' && penPoints.length < 2) { liveElement = null; return; }
+  if (currentTool !== 'pen') {
+    const dx = Math.abs(liveElement.w), dy = Math.abs(liveElement.h);
+    if (dx < 3 && dy < 3) { liveElement = null; return; }
+  }
+
+  socket.emit('element-commit', liveElement);
+  liveElement = null;
+  updateStatus();
+}
+
+function onWheel(e) {
+  e.preventDefault();
+  const rect = mainCanvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  const delta = e.deltaY < 0 ? 1.1 : 0.9;
+  const newScale = Math.max(0.1, Math.min(5, viewScale * delta));
+  viewX = mx - (mx - viewX) * (newScale / viewScale);
+  viewY = my - (my - viewY) * (newScale / viewScale);
+  viewScale = newScale;
+  document.getElementById('zoomDisplay').textContent = Math.round(viewScale * 100) + '%';
+  render();
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  KEYBOARD
+// ════════════════════════════════════════════════════════════════════════════
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
+  if (e.code === 'Space') { spaceDown = true; mainCanvas.style.cursor = 'grab'; e.preventDefault(); }
+  if (e.key === 'v' || e.key === 'V') setTool('select');
+  if (e.key === 'p' || e.key === 'P') setTool('pen');
+  if (e.key === 'l' || e.key === 'L') setTool('line');
+  if (e.key === 'r' || e.key === 'R') setTool('rect');
+  if (e.key === 'c' || e.key === 'C') setTool('circle');
+  if (e.key === 'a' || e.key === 'A') setTool('arrow');
+  if (e.key === 't' || e.key === 'T') setTool('text');
+  if (e.key === 's' || e.key === 'S') setTool('sticky');
+  if (e.key === 'e' || e.key === 'E') setTool('eraser');
+  if (e.key === 'Delete' || e.key === 'Backspace') {
+    if (selectedId) { socket.emit('element-delete', selectedId); selectedId = null; }
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); doUndo(); }
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Z')) { e.preventDefault(); doRedo(); }
+});
+document.addEventListener('keyup', e => {
+  if (e.code === 'Space') { spaceDown = false; mainCanvas.style.cursor = currentTool === 'pan' ? 'grab' : 'crosshair'; }
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+//  TEXT / STICKY
+// ════════════════════════════════════════════════════════════════════════════
+function confirmText() {
+  const txt = document.getElementById('textArea').value.trim();
+  if (!txt || !pendingTextPos) { cancelText(); return; }
+  const el = {
+    id: genId(), type: 'text', x: pendingTextPos.x, y: pendingTextPos.y,
+    text: txt, color: currentColor, fontSize: 18
+  };
+  socket.emit('element-commit', el);
+  cancelText();
+}
+function cancelText() {
+  document.getElementById('textInputPanel').style.display = 'none';
+  document.getElementById('textArea').value = '';
+  pendingTextPos = null;
+}
+
+function confirmSticky() {
+  const txt = document.getElementById('stickyText').value.trim();
+  if (!txt || !pendingStickyPos) { cancelSticky(); return; }
+  const el = {
+    id: genId(), type: 'sticky', x: pendingStickyPos.x, y: pendingStickyPos.y,
+    text: txt, bg: stickyBg, fg: stickyFg, w: 180, h: 120
+  };
+  socket.emit('element-commit', el);
+  cancelSticky();
+}
+function cancelSticky() {
+  document.getElementById('stickyPanel').style.display = 'none';
+  document.getElementById('stickyText').value = '';
+  pendingStickyPos = null;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  UNDO / REDO / CLEAR
+// ════════════════════════════════════════════════════════════════════════════
+function doUndo() { socket.emit('undo'); }
+function doRedo() { socket.emit('redo'); }
+function confirmClear() {
+  if (elements.length === 0) return;
+  if (confirm('Clear the entire board? This affects all users.')) socket.emit('clear-board');
+}
+function updateHistoryBtns() {
+  document.getElementById('undoBtn').disabled = historyIndex <= 0;
+  document.getElementById('redoBtn').disabled = historyIndex >= historyLength - 1;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  RENDER
+// ════════════════════════════════════════════════════════════════════════════
+function render() {
+  const w = mainCanvas.width, h = mainCanvas.height;
+  ctx.clearRect(0, 0, w, h);
+  ctx.save();
+  ctx.translate(viewX, viewY);
+  ctx.scale(viewScale, viewScale);
+
+  // Draw all committed elements
+  for (const el of elements) drawElement(ctx, el, el.id === selectedId);
+
+  // Draw live element
+  if (liveElement) drawElement(ctx, liveElement, false);
+
+  ctx.restore();
+}
+
+function drawElement(c, el, selected) {
+  c.save();
+  c.lineCap = 'round';
+  c.lineJoin = 'round';
+
+  if (selected) {
+    c.shadowColor = '#6366F1';
+    c.shadowBlur = 12;
+  }
+
+  switch (el.type) {
+    case 'pen': {
+      if (!el.points || el.points.length < 2) break;
+      c.strokeStyle = el.color; c.lineWidth = el.stroke;
+      c.beginPath();
+      c.moveTo(el.points[0].x, el.points[0].y);
+      for (let i = 1; i < el.points.length; i++) {
+        const prev = el.points[i-1], curr = el.points[i];
+        c.quadraticCurveTo(prev.x, prev.y, (prev.x+curr.x)/2, (prev.y+curr.y)/2);
+      }
+      c.stroke();
+      break;
+    }
+    case 'line': {
+      c.strokeStyle = el.color; c.lineWidth = el.stroke;
+      c.beginPath(); c.moveTo(el.x, el.y); c.lineTo(el.x2, el.y2); c.stroke();
+      break;
+    }
+    case 'arrow': {
+      c.strokeStyle = el.color; c.lineWidth = el.stroke;
+      c.beginPath(); c.moveTo(el.x, el.y); c.lineTo(el.x2, el.y2); c.stroke();
+      // arrowhead
+      const angle = Math.atan2(el.y2 - el.y, el.x2 - el.x);
+      const hs = Math.max(12, el.stroke * 4);
+      c.fillStyle = el.color;
+      c.beginPath();
+      c.moveTo(el.x2, el.y2);
+      c.lineTo(el.x2 - hs * Math.cos(angle - 0.4), el.y2 - hs * Math.sin(angle - 0.4));
+      c.lineTo(el.x2 - hs * Math.cos(angle + 0.4), el.y2 - hs * Math.sin(angle + 0.4));
+      c.closePath(); c.fill();
+      break;
+    }
+    case 'rect': {
+      c.strokeStyle = el.color; c.lineWidth = el.stroke;
+      if (el.fill) { c.fillStyle = el.color + '33'; c.fillRect(el.x, el.y, el.w, el.h); }
+      c.strokeRect(el.x, el.y, el.w, el.h);
+      break;
+    }
+    case 'circle': {
+      const cx2 = el.x + el.w / 2, cy2 = el.y + el.h / 2;
+      const rx = Math.abs(el.w / 2), ry = Math.abs(el.h / 2);
+      c.strokeStyle = el.color; c.lineWidth = el.stroke;
+      c.beginPath(); c.ellipse(cx2, cy2, rx, ry, 0, 0, Math.PI * 2);
+      if (el.fill) { c.fillStyle = el.color + '33'; c.fill(); }
+      c.stroke();
+      break;
+    }
+    case 'text': {
+      c.fillStyle = el.color;
+      c.font = `${el.fontSize || 18}px Inter, sans-serif`;
+      c.textBaseline = 'top';
+      const lines = el.text.split('\n');
+      lines.forEach((line, i) => c.fillText(line, el.x, el.y + i * (el.fontSize || 18) * 1.4));
+      break;
+    }
+    case 'sticky': {
+      const r = 8;
+      c.fillStyle = el.bg;
+      roundRect(c, el.x, el.y, el.w, el.h, r);
+      c.fill();
+      // shadow fold
+      c.fillStyle = 'rgba(0,0,0,0.12)';
+      c.beginPath(); c.moveTo(el.x + el.w - 20, el.y + el.h); c.lineTo(el.x + el.w, el.y + el.h); c.lineTo(el.x + el.w, el.y + el.h - 20); c.closePath(); c.fill();
+      c.fillStyle = el.fg;
+      c.font = '13px Inter, sans-serif';
+      c.textBaseline = 'top';
+      const slines = el.text.split('\n');
+      slines.forEach((line, i) => {
+        if (i < 5) c.fillText(line.slice(0, 22), el.x + 10, el.y + 10 + i * 18);
+      });
+      break;
+    }
+  }
+  c.restore();
+}
+
+function roundRect(c, x, y, w, h, r) {
+  c.beginPath();
+  c.moveTo(x + r, y);
+  c.lineTo(x + w - r, y);
+  c.quadraticCurveTo(x + w, y, x + w, y + r);
+  c.lineTo(x + w, y + h - r);
+  c.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  c.lineTo(x + r, y + h);
+  c.quadraticCurveTo(x, y + h, x, y + h - r);
+  c.lineTo(x, y + r);
+  c.quadraticCurveTo(x, y, x + r, y);
+  c.closePath();
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  CURSOR RENDER
+// ════════════════════════════════════════════════════════════════════════════
+function renderCursors() {
+  curCtx.clearRect(0, 0, cursorCanvas.width, cursorCanvas.height);
+  for (const [id, cur] of Object.entries(remoteCursors)) {
+    const s = worldToScreen(cur.x, cur.y);
+    curCtx.save();
+    // Cursor arrow
+    curCtx.fillStyle = cur.color;
+    curCtx.beginPath();
+    curCtx.moveTo(s.x, s.y);
+    curCtx.lineTo(s.x + 10, s.y + 16);
+    curCtx.lineTo(s.x + 4, s.y + 13);
+    curCtx.lineTo(s.x + 0, s.y + 20);
+    curCtx.lineTo(s.x - 3, s.y + 18);
+    curCtx.lineTo(s.x + 1, s.y + 11);
+    curCtx.lineTo(s.x - 5, s.y + 10);
+    curCtx.closePath();
+    curCtx.fill();
+    curCtx.strokeStyle = '#0F1117'; curCtx.lineWidth = 1; curCtx.stroke();
+    // Name tag
+    curCtx.fillStyle = cur.color;
+    const tw = curCtx.measureText(cur.name).width + 12;
+    roundRect(curCtx, s.x + 12, s.y + 18, tw, 20, 4);
+    curCtx.fill();
+    curCtx.fillStyle = '#fff';
+    curCtx.font = 'bold 11px Inter, sans-serif';
+    curCtx.textBaseline = 'middle';
+    curCtx.fillText(cur.name, s.x + 18, s.y + 28);
+    curCtx.restore();
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  HIT TEST
+// ════════════════════════════════════════════════════════════════════════════
+function hitTest(wx, wy) {
+  for (let i = elements.length - 1; i >= 0; i--) {
+    const el = elements[i];
+    if (el.type === 'pen') {
+      for (const p of el.points) {
+        if (Math.hypot(p.x - wx, p.y - wy) < (el.stroke + 6)) return el;
+      }
+    } else if (el.type === 'text') {
+      if (wx >= el.x && wx <= el.x + 200 && wy >= el.y && wy <= el.y + 60) return el;
+    } else if (el.type === 'sticky') {
+      if (wx >= el.x && wx <= el.x + el.w && wy >= el.y && wy <= el.y + el.h) return el;
+    } else if (el.type === 'line' || el.type === 'arrow') {
+      if (ptSegDist(wx, wy, el.x, el.y, el.x2, el.y2) < 8) return el;
+    } else {
+      const minX = Math.min(el.x, el.x + (el.w||0)), maxX = Math.max(el.x, el.x + (el.w||0));
+      const minY = Math.min(el.y, el.y + (el.h||0)), maxY = Math.max(el.y, el.y + (el.h||0));
+      if (wx >= minX && wx <= maxX && wy >= minY && wy <= maxY) return el;
+    }
+  }
+  return null;
+}
+
+function ptSegDist(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay;
+  if (dx === 0 && dy === 0) return Math.hypot(px - ax, py - ay);
+  const t = Math.max(0, Math.min(1, ((px-ax)*dx + (py-ay)*dy) / (dx*dx+dy*dy)));
+  return Math.hypot(px - (ax+t*dx), py - (ay+t*dy));
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  EXPORT
+// ════════════════════════════════════════════════════════════════════════════
+function exportCanvas() {
+  const offscreen = document.createElement('canvas');
+  offscreen.width = mainCanvas.width;
+  offscreen.height = mainCanvas.height;
+  const oc = offscreen.getContext('2d');
+  oc.fillStyle = '#0F1117';
+  oc.fillRect(0, 0, offscreen.width, offscreen.height);
+  // dot grid
+  oc.fillStyle = '#2E3147';
+  for (let x = viewX % 28; x < offscreen.width; x += 28)
+    for (let y = viewY % 28; y < offscreen.height; y += 28)
+      { oc.beginPath(); oc.arc(x, y, 1, 0, Math.PI*2); oc.fill(); }
+
+  oc.save(); oc.translate(viewX, viewY); oc.scale(viewScale, viewScale);
+  for (const el of elements) drawElement(oc, el, false);
+  oc.restore();
+
+  const a = document.createElement('a');
+  a.href = offscreen.toDataURL('image/png');
+  a.download = `syncboard-${roomId}-${Date.now()}.png`;
+  a.click();
+  toast('Board exported as PNG ✓');
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  UI HELPERS
+// ════════════════════════════════════════════════════════════════════════════
+function renderUsers(users) {
+  const bar = document.getElementById('usersBar');
+  bar.innerHTML = users.slice(0, 6).map(u =>
+    `<div class="avatar" style="background:${u.color}" title="${u.name}">${u.name[0]}</div>`
+  ).join('');
+}
+
+function updateStatus() {
+  document.getElementById('elementCount').textContent = elements.length + ' element' + (elements.length !== 1 ? 's' : '');
+}
+
+function copyRoomCode() {
+  navigator.clipboard.writeText(roomId).then(() => toast('Room code copied: ' + roomId));
+}
+
+let toastTimer;
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+function genId() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+</script>
+</body>
+</html>

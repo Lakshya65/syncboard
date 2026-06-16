@@ -1,0 +1,19 @@
+{
+  "name": "syncboard",
+  "version": "1.0.0",
+  "description": "Real-time collaborative whiteboard — production grade",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "socket.io": "^4.7.4",
+    "uuid": "^9.0.0"
+  },
+  "keywords": ["whiteboard", "collaborative", "real-time", "websocket", "canvas"],
+  "author": "Lakshya Jangid",
+  "license": "MIT"
+}
